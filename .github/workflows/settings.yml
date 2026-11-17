@@ -1,40 +1,65 @@
-name: 재입고 알림
+name: 알림 설정 바꾸기
 
+# [Actions] > '알림 설정 바꾸기' > [Run workflow]에서 바꾸고 싶은 칸만 고르면 돼요.
+# 손대지 않은 칸('그대로', 빈칸)은 지금 설정이 유지돼요.
+# 실행이 끝나면 바뀐 설정과 현재 상태가 카톡으로 와요.
 on:
-  schedule:
-    - cron: "*/5 * * * *" # 5분마다 (GitHub 사정에 따라 몇 분씩 늦어질 수 있어요)
   workflow_dispatch:
     inputs:
-      kakao_url:
-        description: "카카오 처음 연결용: 로그인 후 주소창의 전체 주소 (처음 1번만, 평소엔 비워두세요)"
+      watch:
+        description: "감시할 옵션"
+        type: choice
+        default: "그대로"
+        options:
+          - "그대로"
+          - "전체 (아무 옵션이나)"
+          - "미스티코브"
+          - "네이비블루"
+          - "테라코타"
+          - "카키그린"
+      watch_text:
+        description: "옵션 직접 입력 (위 선택보다 우선, 여러 개는 쉼표로. 예: 미스티코브,네이비블루)"
         required: false
         default: ""
-      test_message:
-        description: "테스트 카톡 보내기"
-        type: boolean
-        default: false
+      alert_count:
+        description: "구매 가능해지면 보낼 카톡 횟수 (5분 간격)"
+        type: choice
+        default: "그대로"
+        options:
+          - "그대로"
+          - "1"
+          - "2"
+          - "3"
+          - "5"
+          - "10"
+      alerts:
+        description: "알림 켜기/끄기"
+        type: choice
+        default: "그대로"
+        options:
+          - "그대로"
+          - "켜기"
+          - "끄기 (일시정지)"
+      product_url:
+        description: "다른 상품으로 바꾸기: 상품 페이지 주소 (비우면 그대로)"
+        required: false
+        default: ""
 
 permissions:
-  contents: write # 상태 파일(state 폴더)을 저장하려고 필요해요
+  contents: write # 설정 파일(state 폴더)을 저장하려고 필요해요
 
 concurrency:
   group: restock-alert
   cancel-in-progress: false
 
-# 감시할 옵션·카톡 횟수·알림 켜기/끄기·상품 주소는 이 파일을 고치지 말고
-# [Actions] > '알림 설정 바꾸기'에서 바꿔요.
-env:
-  # 카카오 콘솔에 등록한 리다이렉트 URI와 글자 하나까지 같아야 해요
-  KAKAO_REDIRECT_URI: "https://example.com"
-
 jobs:
-  check:
+  settings:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.ref_name }} # 직전 실행이 저장한 최신 상태부터 시작
+          ref: ${{ github.ref_name }}
 
       - uses: actions/setup-python@v6
         with:
@@ -43,16 +68,20 @@ jobs:
       - name: 필요한 도구 설치
         run: pip install --quiet --disable-pip-version-check requests beautifulsoup4
 
-      - name: 상품 확인 & 카톡 알림
+      - name: 설정 저장 & 현재 상태 확인
         env:
+          SETTINGS_MODE: "true"
+          SET_WATCH: ${{ inputs.watch }}
+          SET_WATCH_TEXT: ${{ inputs.watch_text }}
+          SET_ALERT_COUNT: ${{ inputs.alert_count }}
+          SET_ALERTS: ${{ inputs.alerts }}
+          SET_PRODUCT_URL: ${{ inputs.product_url }}
           KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
           KAKAO_CLIENT_SECRET: ${{ secrets.KAKAO_CLIENT_SECRET }}
           BARK_KEY: ${{ secrets.BARK_KEY }}
-          KAKAO_AUTH_URL: ${{ inputs.kakao_url }}
-          SEND_TEST: ${{ inputs.test_message }}
         run: python restock.py
 
-      - name: 상태 저장
+      - name: 설정 저장
         if: always()
         run: |
           [ -d state ] || exit 0
@@ -63,14 +92,14 @@ jobs:
             echo "바뀐 내용 없음"
             exit 0
           fi
-          git commit --quiet -m "상태 업데이트"
+          git commit --quiet -m "알림 설정 변경"
           for i in 1 2 3; do
             if git pull --quiet --rebase origin "$GITHUB_REF_NAME" && git push --quiet origin "HEAD:$GITHUB_REF_NAME"; then
-              echo "상태 저장 완료"
+              echo "설정 저장 완료"
               exit 0
             fi
             git rebase --abort 2>/dev/null || true
             sleep 5
           done
-          echo "상태 저장 실패"
+          echo "설정 저장 실패"
           exit 1
