@@ -63,6 +63,7 @@ REST_KEY = _env("KAKAO_REST_API_KEY")
 CLIENT_SECRET = _env("KAKAO_CLIENT_SECRET")
 TOKEN_PASSWORD = _env("TOKEN_PASSWORD")  # 비워두면 클라이언트 시크릿으로 암호화해요
 AUTH_INPUT = _env("KAKAO_AUTH_URL")
+BARK_KEY = _env("BARK_KEY")  # 아이폰 Bark 앱의 키 (비워두면 Bark는 안 써요)
 SEND_TEST = _env("SEND_TEST").lower() == "true"
 SETTINGS_MODE = _env("SETTINGS_MODE").lower() == "true"
 MANUAL_RUN = _env("GITHUB_EVENT_NAME") == "workflow_dispatch"
@@ -648,6 +649,61 @@ def kakao_send(text: str, link_url: str) -> None:
         raise _kakao_error(resp, "카카오톡 보내기")
 
 
+
+# ─────────────────────────────────────────────
+# 3-1. Bark (아이폰 푸시 알림) + 묶어서 보내기
+# ─────────────────────────────────────────────
+BARK_PUSH_URL = "https://api.day.app/push"
+
+
+def _bark_key() -> str:
+    """'https://api.day.app/키/...' 처럼 주소째 넣어도 키만 골라내요."""
+    m = re.search(r"https?://[^/\s]+/([A-Za-z0-9]+)", BARK_KEY)
+    return m.group(1) if m else BARK_KEY.strip("/ ")
+
+
+def bark_send(text: str, level: str = "active"):
+    """Bark로 푸시를 보내요. 설정 안 했으면 None, 성공 True, 실패 False."""
+    if not BARK_KEY:
+        return None
+    _mask(_bark_key())
+    title, _, body = text.partition("\n")
+    payload = {
+        "device_key": _bark_key(),
+        "title": title,
+        "body": body or title,
+        "level": level,  # critical = 무음 모드에서도 소리
+        "group": "재입고 알림",
+        "url": PRODUCT_URL,
+    }
+    if level == "critical":
+        payload["volume"] = 7
+        payload["call"] = "1"  # 30초 동안 반복해서 울려요
+    try:
+        resp = requests.post(BARK_PUSH_URL, json=payload, timeout=15)
+        ok = resp.status_code == 200 and _json(resp).get("code", 200) == 200
+        detail = "" if ok else f" [HTTP {resp.status_code}] {_json(resp).get('message', '')}"
+    except requests.RequestException as exc:
+        ok, detail = False, f" ({type(exc).__name__})"
+    print("📱 Bark 알림을 보냈어요." if ok else f"❌ Bark 알림 실패{detail} — BARK_KEY 값을 확인해 주세요.")
+    return ok
+
+
+def notify(text: str, level: str = "active") -> None:
+    """Bark와 카톡으로 함께 보내요. 하나라도 성공하면 성공으로 쳐요."""
+    bark_ok = bark_send(text, level)
+    try:
+        kakao_send(text, PRODUCT_URL)
+    except KakaoNotConnected:
+        if not bark_ok:
+            raise
+        print("ℹ️ 카카오는 아직 연결 전이라 Bark로만 보냈어요.")
+    except KakaoError as exc:
+        if not bark_ok:
+            raise
+        print(f"⚠️ 카톡은 실패했지만 Bark로는 보냈어요: {exc}")
+
+
 def extract_auth_code(text: str) -> str:
     text = text.strip()
     m = re.search(r"[?&#]error=([^&#\s]+)", text)
@@ -752,7 +808,7 @@ def handle_status(res: Result, state: dict) -> int:
                 f"사유: {reason}\nGitHub Actions 실행 기록을 확인해 주세요."
             )
             try:
-                kakao_send(text, PRODUCT_URL)
+                notify(text, "timeSensitive")
                 state["fail_warned"] = True
                 print("📨 점검 필요 카톡을 보냈어요.")
             except KakaoNotConnected as exc:
@@ -780,7 +836,7 @@ def handle_status(res: Result, state: dict) -> int:
         print(f"✅ 이미 알림을 {sent}번 보냈어요. 다시 품절됐다가 풀리면 또 알려드려요.")
         return 0
     try:
-        kakao_send(build_alert_text(res, sent), PRODUCT_URL)
+        notify(build_alert_text(res, sent), "critical" if sent == 0 else "timeSensitive")
         state["alerts_sent"] = sent + 1
         print(f"📨 재입고 카톡을 보냈어요! ({sent + 1}/{ALERT_COUNT})")
         return 0
@@ -818,7 +874,7 @@ def send_status_message(res: Result, setup: bool) -> int:
     tail = "지금 구매할 수 있어요!" if res.status == "available" else "구매 가능해지면 카톡으로 알려드릴게요."
     text = f"{head}\n{res.title}\n현재 상태: {LABEL[res.status]}\n{tail}"
     try:
-        kakao_send(text, PRODUCT_URL)
+        notify(text)
         print("📨 확인용 카톡을 보냈어요. '나와의 채팅'을 확인해 보세요.")
         return 0
     except KakaoError as exc:
@@ -948,7 +1004,7 @@ def send_settings_message(res: Result, changes: list) -> int:
         f"현재 상태: {LABEL[res.status]}",
     ]
     try:
-        kakao_send("\n".join(lines), PRODUCT_URL)
+        notify("\n".join(lines))
         print("📨 설정 확인 카톡을 보냈어요.")
         return 0
     except KakaoNotConnected as exc:
