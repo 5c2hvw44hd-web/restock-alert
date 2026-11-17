@@ -47,6 +47,7 @@ jobs:
         env:
           KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
           KAKAO_CLIENT_SECRET: ${{ secrets.KAKAO_CLIENT_SECRET }}
+          BARK_KEY: ${{ secrets.BARK_KEY }}
           KAKAO_AUTH_URL: ${{ inputs.kakao_url }}
           SEND_TEST: ${{ inputs.test_message }}
         run: python restock.py
@@ -73,4 +74,3 @@ jobs:
           done
           echo "상태 저장 실패"
           exit 1
-
