@@ -1,0 +1,104 @@
+name: 알림 설정 바꾸기
+
+# [Actions] > '알림 설정 바꾸기' > [Run workflow]에서 바꾸고 싶은 칸만 고르면 돼요.
+# 손대지 않은 칸('그대로', 빈칸)은 지금 설정이 유지돼요.
+# 실행이 끝나면 바뀐 설정과 현재 상태가 카톡으로 와요.
+on:
+  workflow_dispatch:
+    inputs:
+      watch:
+        description: "감시할 옵션"
+        type: choice
+        default: "그대로"
+        options:
+          - "그대로"
+          - "전체 (아무 옵션이나)"
+          - "미스티코브"
+          - "네이비블루"
+          - "테라코타"
+          - "카키그린"
+      watch_text:
+        description: "옵션 직접 입력 (위 선택보다 우선, 여러 개는 쉼표로. 예: 미스티코브,네이비블루)"
+        required: false
+        default: ""
+      alert_count:
+        description: "구매 가능해지면 보낼 카톡 횟수 (5분 간격)"
+        type: choice
+        default: "그대로"
+        options:
+          - "그대로"
+          - "1"
+          - "2"
+          - "3"
+          - "5"
+          - "10"
+      alerts:
+        description: "알림 켜기/끄기"
+        type: choice
+        default: "그대로"
+        options:
+          - "그대로"
+          - "켜기"
+          - "끄기 (일시정지)"
+      product_url:
+        description: "다른 상품으로 바꾸기: 상품 페이지 주소 (비우면 그대로)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write # 설정 파일(state 폴더)을 저장하려고 필요해요
+
+concurrency:
+  group: restock-alert
+  cancel-in-progress: false
+
+jobs:
+  settings:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.ref_name }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: 필요한 도구 설치
+        run: pip install --quiet --disable-pip-version-check requests beautifulsoup4
+
+      - name: 설정 저장 & 현재 상태 확인
+        env:
+          SETTINGS_MODE: "true"
+          SET_WATCH: ${{ inputs.watch }}
+          SET_WATCH_TEXT: ${{ inputs.watch_text }}
+          SET_ALERT_COUNT: ${{ inputs.alert_count }}
+          SET_ALERTS: ${{ inputs.alerts }}
+          SET_PRODUCT_URL: ${{ inputs.product_url }}
+          KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
+          KAKAO_CLIENT_SECRET: ${{ secrets.KAKAO_CLIENT_SECRET }}
+        run: python restock.py
+
+      - name: 설정 저장
+        if: always()
+        run: |
+          [ -d state ] || exit 0
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state
+          if git diff --cached --quiet; then
+            echo "바뀐 내용 없음"
+            exit 0
+          fi
+          git commit --quiet -m "알림 설정 변경"
+          for i in 1 2 3; do
+            if git pull --quiet --rebase origin "$GITHUB_REF_NAME" && git push --quiet origin "HEAD:$GITHUB_REF_NAME"; then
+              echo "설정 저장 완료"
+              exit 0
+            fi
+            git rebase --abort 2>/dev/null || true
+            sleep 5
+          done
+          echo "설정 저장 실패"
+          exit 1
