@@ -3,6 +3,8 @@ name: 재입고 알림
 on:
   schedule:
     - cron: "*/5 * * * *" # 5분마다 (GitHub 사정에 따라 몇 분씩 늦어질 수 있어요)
+    repository_dispatch:
+    types: [check]
   workflow_dispatch:
     inputs:
       kakao_url:
